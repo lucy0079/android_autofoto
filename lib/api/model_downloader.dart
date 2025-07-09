@@ -7,7 +7,7 @@ import 'package:archive/archive.dart'; // ZIP 처리를 위해 임포트
 
 class ModelDownloader {
   // ✅ 서버 코드에 맞게 포트 번호를 9000으로 수정
-  static const String _modelUrl = 'http://192.168.18.124:9000/download-model';
+  static const String _modelUrl = 'http://172.30.48.18:9000/download-model';
   static const String _modelFileName = 'image_classifier.tflite';
 
   // 최종적으로 저장될 모델 파일의 경로

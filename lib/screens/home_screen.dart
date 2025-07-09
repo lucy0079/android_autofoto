@@ -40,6 +40,16 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _loadModel() async {
     setState(() => _statusMessage = '모델을 로딩 중입니다...');
     final modelPath = await ModelDownloader.getModelPath();
+    final modelFile = File(modelPath);
+    if (await modelFile.exists()) {
+    // 모델 파일이 존재하면 크기를 출력
+      print('✅ 모델 파일 존재함. 경로: $modelPath');
+      print('✅ 모델 파일 크기: ${await modelFile.length()} bytes');
+    } else {
+      print('❌ 오류: 모델 파일이 존재하지 않습니다. 경로: $modelPath');
+      setState(() => _statusMessage = '오류: 모델 파일을 찾을 수 없습니다.');
+      return;
+  }
     // TODO: 실제 라벨 파일 경로를 지정해야 합니다.
     await _classifier.loadModel(modelPath: modelPath, labelPath: 'assets/labels.txt');
     setState(() {

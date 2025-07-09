@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:image/image.dart' as img;
 import 'package:tflite_flutter/tflite_flutter.dart';
+import 'package:flutter/services.dart';
 
 class ImageClassifier {
   Interpreter? _interpreter;
@@ -17,14 +18,12 @@ class ImageClassifier {
     }
   }
 
-  // 라벨 파일을 읽어 리스트로 반환
+  // 라벨 파일을 읽어 리스트로 반환 (수정된 부분)
   Future<List<String>> _loadLabels(String labelPath) async {
-    // TODO: 실제 라벨 파일(txt)을 프로젝트 asset에 추가해야 합니다.
-    // 예: assets/labels.txt
-    // final labelData = await rootBundle.loadString(labelPath);
-    // return labelData.split('\n');
-    // 임시 라벨
-    return ['고양이', '강아지', '자동차', '꽃'];
+    // assets 폴더에서 실제 라벨 파일을 읽어옵니다.
+    final labelData = await rootBundle.loadString(labelPath);
+    // 줄바꿈을 기준으로 라벨을 분리하여 리스트로 만듭니다.
+    return labelData.split('\n');
   }
 
   // 이미지를 분류하고 가장 확률이 높은 라벨을 반환하는 함수
