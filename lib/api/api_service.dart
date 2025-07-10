@@ -7,7 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:archive/archive.dart';
 
 class ApiService {
-  static const String _baseUrl = 'http://172.20.10.4:9000/';
+  static const String _baseUrl = 'http://172.20.10.4:9000';
 
   // 1. 서버에서 모델 목록을 가져오는 함수
   static Future<List<String>> getAvailableModels() async {
@@ -28,7 +28,8 @@ class ApiService {
   // 이제 각 모델은 자신의 이름으로 된 폴더 안에 저장됩니다.
   static Future<bool> downloadAndUnzipModel(String modelName) async {
     try {
-      final response = await http.get(Uri.parse('$_baseUrl/download-model/$modelName'));
+      final url = Uri.parse('$_baseUrl/download-model?model_name=$modelName');
+      final response = await http.get(url);
       if (response.statusCode == 200) {
         final zipBytes = response.bodyBytes;
         final archive = ZipDecoder().decodeBytes(zipBytes);
