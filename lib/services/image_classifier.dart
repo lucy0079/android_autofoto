@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'package:flutter/services.dart';
 import 'package:image/image.dart' as img;
 import 'package:path_provider/path_provider.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
@@ -22,7 +21,7 @@ class ImageClassifier {
       final labelPath = '${appDir.path}/models/$modelName/labels.txt';
 
       // 3. 해당 경로의 파일들로 모델과 라벨을 로드합니다.
-      _interpreter = await Interpreter.fromFile(File(modelPath));
+      _interpreter = Interpreter.fromFile(File(modelPath));
       final labelData = await File(labelPath).readAsString();
       _labels = labelData.split('\n').where((label) => label.isNotEmpty).toList();
       

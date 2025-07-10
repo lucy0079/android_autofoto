@@ -6,6 +6,27 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
 import '../api/api_service.dart';
 import '../services/image_classifier.dart';
+import 'package:device_info_plus/device_info_plus.dart';
+import '../services/multi_image_classifier.dart';
+import '../services/multi_image_controller.dart';
+
+Future<bool> requestGalleryPermission() async {
+  final androidInfo = await DeviceInfoPlugin().androidInfo;
+  int sdkInt = androidInfo.version.sdkInt;
+
+  if (sdkInt >= 34) {
+    var images = await Permission.photos.request();
+    var videos = await Permission.videos.request();
+    return images.isGranted && videos.isGranted;
+  } else if (sdkInt >= 33) {
+    var images = await Permission.photos.request();
+    var videos = await Permission.videos.request();
+    return images.isGranted && videos.isGranted;
+  } else {
+    var storage = await Permission.storage.request();
+    return storage.isGranted;
+  }
+}
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -17,27 +38,27 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final ImageClassifier _classifier = ImageClassifier();
   final ImagePicker _picker = ImagePicker();
+  final MultiImageController _multiImageController = MultiImageController();
+  late final MultiImageClassifier _multiImageClassifier;
 
-  // 앱 상태를 관리하는 변수들
   String _statusMessage = '앱을 초기화 중입니다...';
   String? _currentModelName;
   bool _isModelReady = false;
   bool _isProcessing = false;
 
-  // 이미지 및 결과 표시를 위한 변수들
-  File? _selectedImage;
-  List<Map<String, dynamic>>? _classificationResult;
+  List<File>? _selectedImages;
+  List<List<Map<String, dynamic>>?> _classificationResults = [];
 
   @override
   void initState() {
     super.initState();
+    _multiImageClassifier = MultiImageClassifier(_classifier, _multiImageController);
     _initialize();
   }
 
   /// 앱 시작 시 저장된 모델을 불러오는 초기화 함수
   Future<void> _initialize() async {
     final prefs = await SharedPreferences.getInstance();
-    // 저장된 모델 이름 불러오기, 없으면 'mobilenetv2'를 기본값으로 사용
     String modelToLoad = prefs.getString('selected_model') ?? 'mobilenetv2';
     await _loadOrDownloadModel(modelToLoad);
   }
@@ -47,10 +68,10 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       _currentModelName = modelName;
       _isModelReady = false;
-      _isProcessing = true; // 로딩 시작
+      _isProcessing = true;
       _statusMessage = '$modelName 모델을 준비 중입니다...';
-      _selectedImage = null;
-      _classificationResult = null;
+      _selectedImages = null;
+      _classificationResults = [];
     });
 
     final appDir = await getApplicationDocumentsDirectory();
@@ -69,10 +90,10 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     await _classifier.initializeClassifier(modelName);
-    
+
     if (_classifier.isModelLoaded()) {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('selected_model', modelName); // 성공 시 모델 이름 저장
+      await prefs.setString('selected_model', modelName);
       setState(() {
         _isModelReady = true;
         _statusMessage = '준비 완료! 사진을 선택하세요.';
@@ -80,7 +101,7 @@ class _HomeScreenState extends State<HomeScreen> {
     } else {
       setState(() => _statusMessage = '모델 로딩 실패');
     }
-    setState(() => _isProcessing = false); // 로딩 끝
+    setState(() => _isProcessing = false);
   }
 
   /// 모델 선택 다이얼로그를 보여주는 함수
@@ -106,7 +127,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   onTap: () {
                     Navigator.of(context).pop();
                     if (_currentModelName != modelName) {
-                      _loadOrDownloadModel(modelName); // 새 모델 선택
+                      _loadOrDownloadModel(modelName);
                     }
                   },
                 );
@@ -124,32 +145,42 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  /// 갤러리에서 사진을 선택하고 분류하는 함수
-  Future<void> _pickAndClassifyImage() async {
-    var status = await Permission.storage.request();
-    if (status.isDenied || status.isPermanentlyDenied) {
+  /// 갤러리에서 여러 장의 사진을 선택하고 분류하는 함수
+  Future<void> _pickAndClassifyImages() async {
+    var status = await Permission.photos.request();
+    if (!status.isGranted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('저장소 접근 권한이 필요합니다.')),
+        const SnackBar(content: Text('사진 접근 권한이 필요합니다.')),
       );
       return;
     }
 
-    final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
-    if (image == null) return;
+    final List<XFile>? pickedList = await _picker.pickMultiImage();
+    if (pickedList == null || pickedList.isEmpty) {
+      setState(() {
+        _statusMessage = '이미지를 선택하지 않았습니다.';
+        _isProcessing = false;
+      });
+      return;
+    }
 
     setState(() {
-      _selectedImage = File(image.path);
-      _isProcessing = true;
       _statusMessage = '이미지를 분류 중입니다...';
-      _classificationResult = null;
+      _selectedImages = pickedList.map((xfile) => File(xfile.path)).toList();
+      _classificationResults = [];
+      _isProcessing = true;
     });
 
-    final results = await _classifier.classifyImage(_selectedImage!);
-    
+    List<List<Map<String, dynamic>>?> results = [];
+    for (final imageFile in _selectedImages!) {
+      final result = await _classifier.classifyImage(imageFile);
+      results.add(result);
+    }
+
     setState(() {
-      _classificationResult = results;
+      _classificationResults = results;
       _isProcessing = false;
-      _statusMessage = results != null ? '분류 완료!' : '분류 실패';
+      _statusMessage = results.isNotEmpty ? '분류 완료!' : '이미지를 선택하지 않았습니다.';
     });
   }
 
@@ -172,65 +203,64 @@ class _HomeScreenState extends State<HomeScreen> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              // 이미지 표시 영역
               Expanded(
-                child: Container(
-                  width: double.infinity,
-                  decoration: BoxDecoration(
-                    border: Border.all(color: Colors.grey.shade300),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: _selectedImage != null
-                      ? ClipRRect(
-                          borderRadius: BorderRadius.circular(11),
-                          child: Image.file(_selectedImage!, fit: BoxFit.cover),
-                        )
-                      : const Center(child: Text('분류할 이미지를 선택하세요')),
-                ),
-              ),
-              const SizedBox(height: 20),
-
-              // 결과 표시 영역
-              SizedBox(
-                height: 100, // 결과 표시 영역 높이 고정
-                child: _isProcessing
-                    ? Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const CircularProgressIndicator(),
-                          const SizedBox(height: 10),
-                          Text(_statusMessage),
-                        ],
+                child: _selectedImages != null && _selectedImages!.isNotEmpty
+                    ? ListView.builder(
+                        scrollDirection: Axis.horizontal,
+                        itemCount: _selectedImages!.length,
+                        itemBuilder: (context, index) {
+                          final imageFile = _selectedImages![index];
+                          final result = (_classificationResults.length > index)
+                              ? _classificationResults[index]
+                              : null;
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 4.0),
+                            child: Column(
+                              children: [
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(11),
+                                  child: Image.file(
+                                    imageFile,
+                                    width: 120,
+                                    height: 120,
+                                    fit: BoxFit.cover,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                if (result != null && result.isNotEmpty)
+                                  Text(
+                                    '${result[0]['label']} (${(result[0]['confidence'] * 100).toStringAsFixed(1)}%)',
+                                    style: Theme.of(context).textTheme.bodyLarge,
+                                  )
+                                else
+                                  const Text('분류 결과 없음'),
+                              ],
+                            ),
+                          );
+                        },
                       )
-                    : _classificationResult != null
-                        ? Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text('분류 결과:', style: Theme.of(context).textTheme.titleMedium),
-                              const SizedBox(height: 4),
-                              ..._classificationResult!.map((result) {
-                                final label = result['label'];
-                                final confidence = (result['confidence'] as double) * 100;
-                                return Text(
-                                  '- $label (${confidence.toStringAsFixed(1)}%)',
-                                  style: Theme.of(context).textTheme.bodyLarge,
-                                );
-                              }).toList(),
-                            ],
-                          )
-                        : Center(child: Text(_statusMessage)),
+                    : const Center(child: Text('분류할 이미지를 선택하세요')),
               ),
               const SizedBox(height: 20),
-
-              // 액션 버튼
+              if (_isProcessing)
+                Column(
+                  children: [
+                    const CircularProgressIndicator(),
+                    const SizedBox(height: 10),
+                    Text(_statusMessage),
+                  ],
+                )
+              else
+                Text(_statusMessage),
+              const SizedBox(height: 20),
               ElevatedButton.icon(
                 style: ElevatedButton.styleFrom(
                   minimumSize: const Size(double.infinity, 50),
                   textStyle: const TextStyle(fontSize: 18),
                 ),
                 icon: const Icon(Icons.photo_library_outlined),
-                label: const Text('사진 선택 및 분류'),
-                onPressed: _isModelReady && !_isProcessing ? _pickAndClassifyImage : null,
+                label: const Text('사진 여러 장 선택 및 분류'),
+                onPressed: _isModelReady && !_isProcessing ? _pickAndClassifyImages : null,
               ),
             ],
           ),
