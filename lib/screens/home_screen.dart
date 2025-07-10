@@ -1,7 +1,10 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import '../api/model_downloader.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:path_provider/path_provider.dart';
+import '../api/api_service.dart';
 import '../services/image_classifier.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -15,130 +18,224 @@ class _HomeScreenState extends State<HomeScreen> {
   final ImageClassifier _classifier = ImageClassifier();
   final ImagePicker _picker = ImagePicker();
 
-  String _statusMessage = '앱이 준비되었습니다.';
-  String? _classificationResult;
-  File? _selectedImage;
+  // 앱 상태를 관리하는 변수들
+  String _statusMessage = '앱을 초기화 중입니다...';
+  String? _currentModelName;
   bool _isModelReady = false;
+  bool _isProcessing = false;
+
+  // 이미지 및 결과 표시를 위한 변수들
+  File? _selectedImage;
+  List<Map<String, dynamic>>? _classificationResult;
 
   @override
   void initState() {
     super.initState();
-    _init();
+    _initialize();
   }
 
-  Future<void> _init() async {
-    final isDownloaded = await ModelDownloader.isModelDownloaded();
-    if (isDownloaded) {
-      await _loadModel();
-    } else {
-      setState(() {
-        _statusMessage = '분류를 위해 모델을 다운로드하세요.';
-      });
-    }
+  /// 앱 시작 시 저장된 모델을 불러오는 초기화 함수
+  Future<void> _initialize() async {
+    final prefs = await SharedPreferences.getInstance();
+    // 저장된 모델 이름 불러오기, 없으면 'mobilenetv2'를 기본값으로 사용
+    String modelToLoad = prefs.getString('selected_model') ?? 'mobilenetv2';
+    await _loadOrDownloadModel(modelToLoad);
   }
 
-  Future<void> _loadModel() async {
-    setState(() => _statusMessage = '모델을 로딩 중입니다...');
-    final modelPath = await ModelDownloader.getModelPath();
-    final modelFile = File(modelPath);
-    if (await modelFile.exists()) {
-    // 모델 파일이 존재하면 크기를 출력
-      print('✅ 모델 파일 존재함. 경로: $modelPath');
-      print('✅ 모델 파일 크기: ${await modelFile.length()} bytes');
-    } else {
-      print('❌ 오류: 모델 파일이 존재하지 않습니다. 경로: $modelPath');
-      setState(() => _statusMessage = '오류: 모델 파일을 찾을 수 없습니다.');
-      return;
-  }
-    // TODO: 실제 라벨 파일 경로를 지정해야 합니다.
-    await _classifier.loadModel(modelPath: modelPath, labelPath: 'assets/labels.txt');
+  /// 특정 모델을 로드하거나, 없으면 다운로드 후 로드하는 함수
+  Future<void> _loadOrDownloadModel(String modelName) async {
     setState(() {
-      _isModelReady = true;
-      _statusMessage = '모델 준비 완료! 사진을 선택하세요.';
+      _currentModelName = modelName;
+      _isModelReady = false;
+      _isProcessing = true; // 로딩 시작
+      _statusMessage = '$modelName 모델을 준비 중입니다...';
+      _selectedImage = null;
+      _classificationResult = null;
     });
-  }
 
-  // Future<void> _downloadModel() async {
-  //   setState(() => _statusMessage = '모델을 다운로드 중입니다...');
-  //   final file = await ModelDownloader.downloadModel();
-  //   if (file != null) {
-  //     await _loadModel();
-  //   } else {
-  //     setState(() => _statusMessage = '모델 다운로드에 실패했습니다.');
-  //   }
-  // }
+    final appDir = await getApplicationDocumentsDirectory();
+    final modelFile = File('${appDir.path}/models/$modelName/model.tflite');
 
-    Future<void> downloadAndUnzipModel() async {
-    setState(() => _statusMessage = '모델을 다운로드 중입니다...');
-    final file = await ModelDownloader.downloadAndUnzipModel();
-    if (file != null) {
-      await _loadModel();
-    } else {
-      setState(() => _statusMessage = '모델 다운로드에 실패했습니다.');
+    if (!await modelFile.exists()) {
+      setState(() => _statusMessage = '$modelName 모델을 다운로드 중입니다...');
+      bool success = await ApiService.downloadAndUnzipModel(modelName);
+      if (!success) {
+        setState(() {
+          _statusMessage = '모델 다운로드 실패';
+          _isProcessing = false;
+        });
+        return;
+      }
     }
+
+    await _classifier.initializeClassifier(modelName);
+    
+    if (_classifier.isModelLoaded()) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('selected_model', modelName); // 성공 시 모델 이름 저장
+      setState(() {
+        _isModelReady = true;
+        _statusMessage = '준비 완료! 사진을 선택하세요.';
+      });
+    } else {
+      setState(() => _statusMessage = '모델 로딩 실패');
+    }
+    setState(() => _isProcessing = false); // 로딩 끝
   }
 
+  /// 모델 선택 다이얼로그를 보여주는 함수
+  Future<void> _showModelSelectionDialog() async {
+    List<String> models = await ApiService.getAvailableModels();
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('모델 선택'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: models.length,
+              itemBuilder: (context, index) {
+                final modelName = models[index];
+                return ListTile(
+                  title: Text(modelName),
+                  trailing: _currentModelName == modelName ? const Icon(Icons.check, color: Colors.blue) : null,
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    if (_currentModelName != modelName) {
+                      _loadOrDownloadModel(modelName); // 새 모델 선택
+                    }
+                  },
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('닫기'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// 갤러리에서 사진을 선택하고 분류하는 함수
   Future<void> _pickAndClassifyImage() async {
+    var status = await Permission.storage.request();
+    if (status.isDenied || status.isPermanentlyDenied) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('저장소 접근 권한이 필요합니다.')),
+      );
+      return;
+    }
+
     final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
     if (image == null) return;
 
     setState(() {
       _selectedImage = File(image.path);
+      _isProcessing = true;
       _statusMessage = '이미지를 분류 중입니다...';
       _classificationResult = null;
     });
 
-    final result = await _classifier.classifyImage(_selectedImage!);
+    final results = await _classifier.classifyImage(_selectedImage!);
+    
     setState(() {
-      _classificationResult = result;
-      _statusMessage = '분류 완료!';
+      _classificationResult = results;
+      _isProcessing = false;
+      _statusMessage = results != null ? '분류 완료!' : '분류 실패';
     });
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('AutoFoto 데모')),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            if (_selectedImage != null)
-              Container(
-                height: 300,
-                width: 300,
-                margin: const EdgeInsets.only(bottom: 20),
-                child: Image.file(_selectedImage!, fit: BoxFit.cover),
+      appBar: AppBar(
+        title: Text('AutoFoto${_currentModelName != null ? " ($_currentModelName)" : ""}'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.swap_horiz_rounded),
+            onPressed: _showModelSelectionDialog,
+            tooltip: '모델 선택',
+          ),
+        ],
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              // 이미지 표시 영역
+              Expanded(
+                child: Container(
+                  width: double.infinity,
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Colors.grey.shade300),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: _selectedImage != null
+                      ? ClipRRect(
+                          borderRadius: BorderRadius.circular(11),
+                          child: Image.file(_selectedImage!, fit: BoxFit.cover),
+                        )
+                      : const Center(child: Text('분류할 이미지를 선택하세요')),
+                ),
               ),
-            Text(_statusMessage, style: Theme.of(context).textTheme.headlineSmall),
-            const SizedBox(height: 10),
-            if (_classificationResult != null)
-              Text(
-                '분류 결과: $_classificationResult',
-                style: Theme.of(context).textTheme.titleLarge?.copyWith(color: Colors.blue),
+              const SizedBox(height: 20),
+
+              // 결과 표시 영역
+              SizedBox(
+                height: 100, // 결과 표시 영역 높이 고정
+                child: _isProcessing
+                    ? Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const CircularProgressIndicator(),
+                          const SizedBox(height: 10),
+                          Text(_statusMessage),
+                        ],
+                      )
+                    : _classificationResult != null
+                        ? Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('분류 결과:', style: Theme.of(context).textTheme.titleMedium),
+                              const SizedBox(height: 4),
+                              ..._classificationResult!.map((result) {
+                                final label = result['label'];
+                                final confidence = (result['confidence'] as double) * 100;
+                                return Text(
+                                  '- $label (${confidence.toStringAsFixed(1)}%)',
+                                  style: Theme.of(context).textTheme.bodyLarge,
+                                );
+                              }).toList(),
+                            ],
+                          )
+                        : Center(child: Text(_statusMessage)),
               ),
-            const SizedBox(height: 30),
-            if (!_isModelReady)
+              const SizedBox(height: 20),
+
+              // 액션 버튼
               ElevatedButton.icon(
-                icon: const Icon(Icons.download),
-                label: const Text('1. 모델 다운로드'),
-                onPressed:downloadAndUnzipModel,
+                style: ElevatedButton.styleFrom(
+                  minimumSize: const Size(double.infinity, 50),
+                  textStyle: const TextStyle(fontSize: 18),
+                ),
+                icon: const Icon(Icons.photo_library_outlined),
+                label: const Text('사진 선택 및 분류'),
+                onPressed: _isModelReady && !_isProcessing ? _pickAndClassifyImage : null,
               ),
-            if (_isModelReady)
-              ElevatedButton.icon(
-                icon: const Icon(Icons.photo_library),
-                label: const Text('2. 사진 선택 및 분류'),
-                onPressed: _pickAndClassifyImage,
-              ),
-          ],
+            ],
+          ),
         ),
       ),
     );
-  }
-
-  @override
-  void dispose() {
-    _classifier.dispose();
-    super.dispose();
   }
 }
